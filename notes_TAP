@@ -1,0 +1,12 @@
+adjunct equations
+beta functions represent input for 0 coverage and 
+no coverage
+state variable C- u is the rate of application, rho
+is rate at which decays
+Change from being called beta to calling FOI (lambda)
+Sean values for SR costs from VCOM analysis? Ask
+6 month decay rate rater than 14 day 365/180- this is an 
+annual time scale (all over)
+Trial and error for the number of iterations
+omega- controls weighted average of the past 2 (.99 is weight of most recent)
+umat is a matrix of all the proposals 
