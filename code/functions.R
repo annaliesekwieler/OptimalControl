@@ -63,20 +63,6 @@ m = function(temp, epsilon, mu_m, c.RD, aR, bR){
   L(temp, epsilon, mu_m, c.RD, aR, bR) / mu_m
 }
 
-# # multiply these by epsilon to get true value
-# B_no_epsilon = function(temp,  mu_m){
-#   1 / (exp(GP(temp) * mu_m) - 1)
-# }
-# 
-# L_no_epsilon = function(temp, mu_m, c.RD, aR, bR){
-#   B_no_epsilon(temp,  mu_m) * PEAt_PEAr(temp, c.RD, aR, bR) / tau_EA(temp)
-# }
-# 
-# m_no_epsilon = function(temp, mu_m, c.RD, aR, bR){
-#   L_no_epsilon(temp, mu_m, c.RD, aR, bR) / mu_m
-# }
-
-
 # primary function
 EIR = function(temp, X, PHM, epsilon, mu_m, c.RD, aR, bR){
   numerator = m(temp, epsilon, mu_m, c.RD, aR, bR) * (a(temp)) ^ 2 * PHM * X * exp(-mu_m * n(temp))
@@ -251,7 +237,7 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
                           tvec_spline = seq(1, 365*5),
                           A_sr = 1,
                           G_sr = 1, 
-                          rho = 1/14,
+                          rho = 1/180,
                           Cmax = .8)
     
     out = model$run(t)

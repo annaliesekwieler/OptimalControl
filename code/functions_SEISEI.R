@@ -63,31 +63,24 @@ m = function(temp, epsilon, mu_m, c.RD, aR, bR){
   L(temp, epsilon, mu_m, c.RD, aR, bR) / mu_m
 }
 
+# adult mosquito mortality
+g = function(temp){
+  1 - (-.000828 * (temp^2) + .0367 * temp + .522)
+}
+
 #### set default parameter values #####
 
 # eggs laid per gonotrophic cycle
 epsilon = 50
-# adult mosquito mortality (no intervention)
-mu_m = -log(.98)
 
 # epidemiological parameters
 
 # transmission probabilities
-PHM = 0.125
-PMH = 0.5
+b = 0.125
+c = 0.5
 
 # cumulative rainfall parameters
 aR = 0.5
-
-# recovery rate
-r = 1/216
-
-#### calibrate the mosquito-to-human ratio ####
-
-calibrate_m = function(bR){
-  
-}
-
 
 #### function that optimizes bR  for a particular raster ####
 
@@ -102,17 +95,17 @@ SEI_model = odin::odin({
   # Derivatives
   
   A_modified = A * (1-C) + A * .75 * C
-  mu_modified = mu_m * (1-C) + mu_m * .9 * C
+  mu_modified = G * (1-C) + G * .9 * C
 
   # prevalence is current IC + IS
   
   
-  deriv(Sh) <- -A_modified * PMH * M * Im * Sh + r*Ih
-  deriv(Eh) <- A_modified * PMH * M * Im * Sh - tau * Eh
+  deriv(Sh) <- -A_modified * c * Im * Sh + r*Ih
+  deriv(Eh) <- A_modified * c * Im * Sh - tau * Eh
   deriv(Ih) <- tau * Eh - r * Ih
   
-  deriv(Sm) = M * mu_modified - A_modified * PHM * Ih * Sm - mu_modified * Sm
-  deriv(Em) =  A_modified * PHM * Ih * Sm - (1/N)*Em - mu_modified * Em
+  deriv(Sm) = M * mu_modified - A_modified * b * Ih * Sm - mu_modified * Sm
+  deriv(Em) =  A_modified * b * Ih * Sm - (1/N)*Em - mu_modified * Em
   deriv(Im) = (1/N)*Em - mu_modified * Im
   
   deriv(C) = U * (1 - C / Cmax) - rho * C
@@ -132,28 +125,32 @@ SEI_model = odin::odin({
   M = interpolate(tvec_spline, m_in, 'spline')
   A = interpolate(tvec_spline, a_in, 'spline')
   N = interpolate(tvec_spline, n_in, 'spline')
+  G = interpolate(tvec_spline, g_in, 'spline')
   U = interpolate(tvec_spline, u_in, 'spline')
   
   tvec_spline[] = user()
   m_in[] = user()
   a_in[] = user()
   n_in[] = user()
+  g_in[] = user()
   u_in[] = user()
   
   dim(tvec_spline) = 1825
   dim(m_in) = 1825
   dim(a_in) = 1825
   dim(n_in) = 1825
+  dim(g_in) = 1825
   dim(u_in) = 1825
   
   ## parameters
   r = user()
-  mu_m = user()
   Cmax = user()
   rho = user()
   tau = user()
-  PHM = user()
-  PMH = user()
+  b = user()
+  c = user()
+  phi_a = user()
+  phi_g = user()
   
   # Initial conditions
   Sh_init = user()
@@ -166,121 +163,84 @@ SEI_model = odin::odin({
   
 })
 
+run_SEISEI = function(temps, rainfall, prop_cases_treated, prevalence_2019,
+                      incidence_2020, prevalence_2020,
+                      u_in = rep(0, 1825), rho = 1/180, Cmax = .8,
+                      b = .125, c = 0.5, tau = 1/10,
+                      phi_a = 0.75, phi_g = 0.1,
+                      # start times to get result (default is last year)
+                      start = 11675, bR = 0) {
+  
+  # use rolling mean on temperature
+  temps = c(rollmean(temps, k = 50)[268:316],
+            rollmean(temps, k = 50))
+  rainfall = c(rollmean(rainfall, k = 40)[288:326],
+               rollmean(rainfall, k = 40))
+  # replace values that are above or below the thresholds
+  temps[temps > 31.7] = 31.7
+  temps[temps < 15.39] = 15.39
+  
+  # calculate m, g, a, and n
+  
+  r = (1-prop_cases_treated) / ( (prevalence_2020 / incidence_2020) - 
+                                   (1 / 7))
 
+  g_in_vec = rep(g(temps), times = 5)
+  m_in_vec = m(temps,  epsilon = 50, mu_m = g_in_vec, c.RD = rainfall, aR, bR)
+  a_in_vec = rep(a(temps), times = 5)
+  n_in_vec = rep(n(temps), times = 5)
+ 
+  
+  
+  t = seq(1, 365 * 5, by =1/8)
+  
+  model = SEI_model$new(Sh_init = 1 - .01 - prevalence_2019,
+                        Eh_init=.01,
+                        Ih_init = prevalence_2019,
+                        Sm_init = 1 - .01 - prevalence_2019,
+                        Em_init=.01,
+                        Im_init = prevalence_2019,
+                        C_init = 0,
+                        r = r,
+                        g_in = g_in_vec,
+                        m_in = m_in_vec,
+                        a_in = a_in_vec,
+                        n_in = n_in_vec,
+                        u_in = rep(0, 1825),
+                        tvec_spline = seq(1, 365*5),
+                        rho = rho,
+                        Cmax = Cmax,
+                        b = b,
+                        c = c,
+                        tau = tau,
+                        phi_a = phi_a,
+                        phi_g = phi_g)
+  
+  out = model$run(t)
+  out=as.data.frame(out)[start:nrow(out),]
+  
+  return(out)
+  
+}
 
 calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence_2019, incidence_2020,
                                  prevalence_2020, default_bR = 0, x, y){
   
-  temps[temps > 31.7] = 31.7
-  temps[temps < 15.39] = 15.39
-  
-  temps = c(rollmean(temps, k = 50)[268:316],
-            rollmean(temps, k = 50))
-  
-  rainfall = c(rollmean(rainfall, k = 40)[288:326],
-               rollmean(rainfall, k = 40))
-  
-  temps[temps > 31.7] = 31.7
-  temps[temps < 15.39] = 15.39
-  
   predicted_prevalence = function(bR){
     
-    m_in_vec_one_year = rep(m(temps,  epsilon = 50, mu_m, c.RD = rainfall, aR, bR)) 
-    
-    m_in_vec = rep(m_in_vec_one_year, times = 5)
-    
-    a_in_vec_one_year = a(temps)
-    a_in_vec = rep(a_in_vec_one_year, times = 5)
-    
-    n_in_vec_one_year = n(temps)
-    n_in_vec = rep(n_in_vec_one_year, times = 5)
-    
-    t = seq(1, 365 * 5, by =1/8)
-    
-    model = SEI_model$new(Sh_init = 1 - .01 - prevalence_2019,
-                          Eh_init=.01,
-                          Ih_init = prevalence_2019,
-                          Sm_init = 1 - .01 - prevalence_2019,
-                          Em_init=.01,
-                          Im_init = prevalence_2019,
-                          C_init = 0,
-                          r = 1 / 157,
-                          mu_m = mu_m,
-                          m_in = m_in_vec,
-                          a_in = a_in_vec,
-                          n_in = n_in_vec,
-                          u_in = rep(0, 1825),
-                          tvec_spline = seq(1, 365*5),
-                          rho = 1/14,
-                          Cmax = .8,
-                          PHM = .125,
-                          PMH = 0.5,
-                          tau = 1/10)
-    
-    out = model$run(t)
-    
-    out=as.data.frame(out)[11675:nrow(out),]
-    
-    return(mean(out$Ih))
+    model_res = run_SEISEI(temps = temps, rainfall = rainfall,
+                           prop_cases_treated = prop_cases_treated,
+                           prevalence_2019,
+                          incidence_2020, prevalence_2020, bR = bR)
+  
+    return(mean(model_res$Ih))
     
   }
-  # 
-  # predicted_incidence = function(bR){
-  #   
-  #   
-  #   m_in_vec_one_year = rep(m(temps,  epsilon, mu_m, c.RD = rainfall, aR, bR)) 
-  #   
-  #   m_in_vec = rep(m_in_vec_one_year, times = 5)
-  #   
-  #   a_in_vec_one_year = a(temps)
-  #   a_in_vec = rep(a_in_vec_one_year, times = 5)
-  #   
-  #   n_in_vec_one_year = n(temps)
-  #   n_in_vec = rep(n_in_vec_one_year, times = 5)
-  #   
-  #   t = seq(1, 365 * 5, by =1/8)
-  #   
-  #   
-  #   
-  #   model = SEI_model$new(S_init = 1 - .01 - prevalence_2019,
-  #                         E_init=.01,
-  #                         Ic_init = prevalence_2019 * prop_cases_treated,
-  #                         Is_init = prevalence_2019 * (1-prop_cases_treated),
-  #                         r = ,
-  #                         epsilon = epsilon,
-  #                         c = prop_cases_treated,
-  #                         relative_infectiousness = 0.5,
-  #                         mu_m = mu_m,
-  #                         m_in = m_in_vec,
-  #                         a_in = a_in_vec,
-  #                         n_in = n_in_vec,
-  #                         tvec_spline = seq(1, 365*5))
-  #   
-  #   out = model$run(t)
-  #   
-  #   out=as.data.frame(out)[11674:nrow(out),]
-  #   
-  #   prev = out$I
-  #   
-  #   m_vector = rep(m_in_vec_one_year, each = 8)
-  #   a_vector = rep(a_in_vec_one_year, each = 8)
-  #   n_vector = rep(n_in_vec_one_year, each = 8)
-  #   
-  #   eir = (m_vector * (a_vector ^ 2) * PHM * prev * exp(-mu_m*n_vector)) / 
-  #     (mu_m + a_vector * PHM * prev)
-  #   
-  #   foi = 1 - exp(-PMH * eir)
-  #   
-  #   return(mean(out$S * foi))
-  #   
-  # }
-  # 
+  
   
   optimizing_function = function(parameters){
     bR = parameters[1]
-    #  rs = parameters[2]
-    abs(predicted_prevalence(bR) - prevalence_2020)  #  + 
-    #   ((predicted_incidence(bR) - incidence_2020)^2)
+    abs(predicted_prevalence(bR) - prevalence_2020)  
   }
   
   optimized_result = optim(par = c( 
