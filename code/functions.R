@@ -207,7 +207,8 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
   
   predicted_prevalence = function(bR){
     
-    m_in_vec_one_year = rep(m(temps,  epsilon, mu_m, c.RD = rainfall, aR, bR)) 
+    m_in_vec_one_year = rep(m(temps,  epsilon,
+                              mu_m = -log(.98), c.RD = rainfall, aR, bR)) 
     
     m_in_vec = rep(m_in_vec_one_year, times = 5)
     
@@ -229,7 +230,7 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
                           epsilon = epsilon,
                           relative_infectiousness = relative_infectiousness,
                           c = prop_cases_treated,
-                          mu_m = mu_m,
+                          mu_m = -log(.98),
                           m_in = m_in_vec,
                           a_in = a_in_vec,
                           n_in = n_in_vec,
@@ -275,7 +276,7 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
                           epsilon = epsilon,
                           c = prop_cases_treated,
                           relative_infectiousness = 0.5,
-                          mu_m = mu_m,
+                          mu_m = -log(.98),
                           m_in = m_in_vec,
                           a_in = a_in_vec,
                           n_in = n_in_vec,
@@ -323,12 +324,3 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
               list(optimized_result$par), optimized_result$convergence, x, y))
   
 }
-
-
-#### Predicted prevalence and incidence with effects of SRs ####
-
-# load SR effects
-load("../data/posterior_samples.RData")
-mean(result$a_mult)
-mean(result$g_mult)
-

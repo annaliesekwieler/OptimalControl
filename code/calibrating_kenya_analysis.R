@@ -126,8 +126,8 @@ plot(epsilon_vals)
 plot(factor_vals)
 
 
-# find the rasters that have predicted values close to the true value
-
-try_again = which(abs(pred_prevalence - kenya_data$prevalence_2020) > .02)
-
-save(try_again, file = "../data/try_again_cal_kenya.RData")
+# put whether the raster was calibrated
+kenya_data = kenya_data %>%
+  mutate(calibrated = if_else(is.na(bR), F, T)) %>%
+  select(-c(new_bR))
+save(kenya_data, file = "../data/kenya_data.RData")

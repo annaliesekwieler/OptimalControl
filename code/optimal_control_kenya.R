@@ -8,7 +8,7 @@ load("../data/kenya_climate_data/kenya_climate_data.RData")
 load("../data/population_data_kenya_2020.RData")
 
 # take out rasters that weren't able to be calibrated
-to_keep = which(!is.na(kenya_data$bR))
+to_keep = kenya_data$calibrated
 kenya_data = kenya_data[to_keep,]
 kenya_temp = kenya_temp[to_keep]
 kenya_rainfall = kenya_rainfall[to_keep]
@@ -19,8 +19,11 @@ source("functions_SEISEI.R")
 # take out the value for a single raster
 prevalence_2019 = kenya_data[1, "prevalence_2019"]
 prevalence_2020 = kenya_data[1, "prevalence_2020"]
+prop_cases_treated = kenya_data[1, "prop_cases"]
+incidence_2020 = kenya_data[1, "incidence_2020"] / 365
 
-temps = kenya_temp[[1]]
+
+temps = kenya_temp[[1]]$daily_temp
 rainfall = kenya_rainfall[[1]]
 
 temps[temps > 31.7] = 31.7
@@ -40,27 +43,30 @@ temps[temps < 13.4] = 13.4
 # time period for simulation
 # start after burn in period, then run
 # see if we need a burn in here or is relatively stable
-tvec_spline = seq(0, 365 * 6,by=1/12)
-tvec = seq(0, 365 * 6,by=1/365)
+tvec_spline = seq(0, 365*10,by=1/12)
+tvec = seq(1, 365*10,by=1)
 
 # set values of epidemiological and entomological parameters
-r = 1 / 157
-mu_m = mu_m
-rho = 1/14
+r = (1-prop_cases_treated) / ( (prevalence_2020 / (incidence_2020) ) - 
+                                      (1 / 7))
+
+rho = 1/180
 Cmax = .8
-PHM = .125
-PMH = 0.5
+b = 0.125
+c = 0.5
 tau = 1/10
 aR = 0.5
 bR = kenya_data$bR[1]
 
+phi_g = 0.9
+phi_a = 0.75
 
 # vectors of a, n, and m. For a and m, under no coverage and coverage
-m_n_in = rep(m(temps,  epsilon = 50, mu_m, c.RD = rainfall, aR, bR), times = 5) 
-m_c_in = rep(m(temps,  epsilon = 50, mu_m * .9, c.RD = rainfall, aR, bR), times = 5) 
-a_n_in = rep(a(temps), times = 5)
-a_c_in = rep(a(temps)*.75, times = 5)
-n_in = n(temps)
+g_n_in = rep(g(temps), times = 10)
+m_n_in = m(rep(temps, 10),  epsilon = 50, g_n_in, c.RD = rep(rainfall, 10),
+           aR, bR)
+a_n_in = rep(a(temps), times = 10)
+n_in = rep(n(temps), times = 10)
 
 # initial control function
 u.fun = function(t){
@@ -68,7 +74,14 @@ u.fun = function(t){
 }
 
 # make up cost per case
-cost_per_clinical_case = 300
+cost_mild_case = 5.84
+cost_severe_case = 30.26
+cost_death = 320650
+
+# probability of mild, severe, death
+dd = 0.003*prop_cases_treated
+ds = 0.1*prop_cases_treated
+dm = prop_cases_treated * (1- .003 - .1)
 
 parms = c()
 # set min and max application rate
@@ -76,8 +89,8 @@ parms['umin'] = 0
 parms['umax'] = 1/30
 
 # set values of parameters for min and max application rate
-umin = rep(parms['umin'],length(tvec))
-umax = rep(parms['umax'],length(tvec))
+umin = rep(parms['umax'], length(tvec))
+umax = c(rep(0, 1825), rep(parms['umax'], 1825))
 
 
 # final conditions of adjoint variables
@@ -114,47 +127,44 @@ u.outfbsm = rep(0, length(tvec))
 # umat.outfbsm[iteration,] = rep(0, length(tvec))
 iteration = 2
 
-# start with a single raster
-
 start.time = Sys.time()
 raster = 1
 repeat{
   # solve for state variables forward in time
-  mod = SEI_model$new(
-    S_init =1 - kenya_data$prevalence_2020[raster] - .01,
-    E_init=.01,
-    Ic_init = kenya_data$prevalence_2020[raster] * kenya_data$prop_cases[raster],
-    Is_init = kenya_data$prevalence_2020[raster] * (1 - kenya_data$prop_cases[raster]),
-    deltaT = population_data_kenya_2020$death_rate / 365,
-    mut = population_data_kenya_2020$birth_rate / 365,
-    rs = 1/224,
-    epsilon = 50,
-    relative_infectiousness = .1,
-    c = kenya_data$prop_cases[raster],
-    mu_m = mu_m * ,
-    m_in = m_in_vec,
-    a_in = a_in_vec,
-    n_in = n_in_vec,
-    tvec_spline = seq(1, 365*5))
+  mod = model_control$new(Sh_init = 1 - .01 - prevalence_2019,
+                      Eh_init=.01,
+                      Ih_init = prevalence_2019,
+                      Sm_init = 1 - .01 - prevalence_2019,
+                      Em_init=.01,
+                      Im_init = prevalence_2019,
+                      C_init = 0,
+                      r = r,
+                      g_in = g_n_in,
+                      m_in = m_n_in,
+                      a_in = a_n_in,
+                      n_in = n_in,
+                      u_in = u.proposed,
+                      tvec_spline = seq(1, 365*10),
+                      rho = rho,
+                      Cmax = Cmax,
+                      b = b,
+                      c = c,
+                      tau = tau,
+                      phi_a = phi_a,
+                      phi_g = phi_g)
   outState = mod$run(tvec)
   # outState = ode(
   #   y = c(states.2025/sum(states.2025),C=0),
   #   times = tvec, func = model_control, parms = parms, method = 'lsoda')
   
   # get functions approximating state variable solutions
-  S0fun = approxfun(tvec, outState[,'S0'], rule = 2)
-  I1fun = approxfun(tvec, outState[,'I1'], rule = 2)
-  R1fun = approxfun(tvec, outState[,'R1'], rule = 2)
-  S1fun = approxfun(tvec, outState[,'S1'], rule = 2)
-  I2fun = approxfun(tvec, outState[,'I2'], rule = 2)
-  R2fun = approxfun(tvec, outState[,'R2'], rule = 2)
-  S2fun = approxfun(tvec, outState[,'S2'], rule = 2)
-  I3fun = approxfun(tvec, outState[,'I3'], rule = 2)
-  R3fun = approxfun(tvec, outState[,'R3'], rule = 2)
-  S3fun = approxfun(tvec, outState[,'S3'], rule = 2)
-  I4fun = approxfun(tvec, outState[,'I4'], rule = 2)
-  R4fun = approxfun(tvec, outState[,'R4'], rule = 2)
-  Cfun  = approxfun(tvec, outState[,'C'],  rule = 2)
+  Shfun = approxfun(tvec, outState[,'Sh'], rule = 2)
+  Ehfun = approxfun(tvec, outState[,'Eh'], rule = 2)
+  Ihfun = approxfun(tvec, outState[,'Ih'], rule = 2)
+  Smfun = approxfun(tvec, outState[,'Sm'], rule = 2)
+  Emfun = approxfun(tvec, outState[,'Em'], rule = 2)
+  Imfun = approxfun(tvec, outState[,'Im'], rule = 2)
+  Cfun = approxfun(tvec, outState[,'C'], rule = 2)
   ufun  = approxfun(tvec, mod$contents()$u_in, rule = 2)
   
   # calculate objective function
@@ -182,47 +192,39 @@ repeat{
   
   # solve for adjoint variables backward in time
   mod = model_adjoint_bkwd$new(
-    beta_mag = exp(beta.opt$minimum),
-    w_I1 = parms['w_I1'],
-    w_I2 = parms['w_I2'],
-    w_I3 = parms['w_I3'],
-    w_I4 = parms['w_I4'],
+    r = r,
+    Cmax = Cmax,
+    rho = rho,
+    tau = tau,
+    b = b,
+    c = c,
+    phi_a = phi_a,
+    phi_g = phi_g,
+    
+    Sh_in = rev(Shfun(tvec)),
+    Eh_in = rev(Ehfun(tvec)),
+    Ih_in = rev(Ihfun(tvec)),
+    Sm_in =rev(Smfun(tvec)),
+    Em_in = rev(Emfun(tvec)),
+    Im_in = rev(Imfun(tvec)),
+    C_in = rev(Cfun(tvec)),
+    
     tvec_spline = tvec_spline,
-    tvec = tvec,
-    beta_c_in = rev(beta_c_in),
-    beta_n_in = rev(beta_n_in),
-    delta_0_in = rev(delta.0.fun(tvec_spline)),
-    delta_1_in = rev(delta.1.fun(tvec_spline)),
-    delta_2_in = rev(delta.2.fun(tvec_spline)),
-    delta_3_in = rev(delta.3.fun(tvec_spline)),
-    delta_4_in = rev(delta.4.fun(tvec_spline)),
-    S0_in = rev(S0fun(tvec)),
-    I1_in = rev(I1fun(tvec)),
-    R1_in = rev(R1fun(tvec)),
-    S1_in = rev(S1fun(tvec)),
-    I2_in = rev(I2fun(tvec)),
-    R2_in = rev(R2fun(tvec)),
-    S2_in = rev(S2fun(tvec)),
-    I3_in = rev(I3fun(tvec)),
-    R3_in = rev(R3fun(tvec)),
-    S3_in = rev(S3fun(tvec)),
-    I4_in = rev(I4fun(tvec)),
-    R4_in = rev(R4fun(tvec)),
-    C_in  = rev(Cfun(tvec)),
-    u_in  = rev(ufun(tvec)),
-    lambdaS0_init = stateAdjoint[1],
-    lambdaI1_init = stateAdjoint[2],
-    lambdaR1_init = stateAdjoint[3],
-    lambdaS1_init = stateAdjoint[4],
-    lambdaI2_init = stateAdjoint[5],
-    lambdaR2_init = stateAdjoint[6],
-    lambdaS2_init = stateAdjoint[7],
-    lambdaI3_init = stateAdjoint[8],
-    lambdaR3_init = stateAdjoint[9],
-    lambdaS3_init = stateAdjoint[10],
-    lambdaI4_init = stateAdjoint[11],
-    lambdaR4_init = stateAdjoint[12],
-    lambdaC_init  = stateAdjoint[13])
+    g_in = g_n_in,
+    m_in = m_n_in,
+    a_in = a_n_in,
+    n_in = n_in,
+    u_in = u.proposed,
+    
+    lambda_Sh_init = stateAdjoint[1],
+    lambda_Eh_init = stateAdjoint[2],
+    lambda_Ih_init = stateAdjoint[3],
+    lambda_Sm_init = stateAdjoint[4],
+    lambda_Em_init = stateAdjoint[5],
+    lambda_Im_init = stateAdjoint[6],
+    lambda_C_init = stateAdjoint[7]
+
+    )
   outAdjoint = mod$run(tvec)
   
   # beta_n_in = spline(tvec_spline,beta_n_in,method='natural')
@@ -234,19 +236,17 @@ repeat{
   #   y = stateAdjoint, times = rev(tvec), func = adjointEqns, parms = parms, method = 'lsoda')
   
   # get functions approximating adjoint variable solutions
-  lambdaS0fun = approxfun(rev(tvec), outAdjoint[,'lambdaS0'], rule = 2)
-  lambdaI1fun = approxfun(rev(tvec), outAdjoint[,'lambdaI1'], rule = 2)  
-  lambdaR1fun = approxfun(rev(tvec), outAdjoint[,'lambdaR1'], rule = 2)
-  lambdaS1fun = approxfun(rev(tvec), outAdjoint[,'lambdaS1'], rule = 2)
-  lambdaI2fun = approxfun(rev(tvec), outAdjoint[,'lambdaI2'], rule = 2)
-  lambdaR2fun = approxfun(rev(tvec), outAdjoint[,'lambdaR2'], rule = 2)
-  lambdaS2fun = approxfun(rev(tvec), outAdjoint[,'lambdaS2'], rule = 2)
-  lambdaI3fun = approxfun(rev(tvec), outAdjoint[,'lambdaI3'], rule = 2)
-  lambdaR3fun = approxfun(rev(tvec), outAdjoint[,'lambdaR3'], rule = 2)
-  lambdaS3fun = approxfun(rev(tvec), outAdjoint[,'lambdaS3'], rule = 2)
-  lambdaI4fun = approxfun(rev(tvec), outAdjoint[,'lambdaI4'], rule = 2)
-  lambdaR4fun = approxfun(rev(tvec), outAdjoint[,'lambdaR4'], rule = 2)
-  lambdaCfun  = approxfun(rev(tvec), outAdjoint[,'lambdaC'],  rule = 2)
+  lambda_Sh_fun = approxfun(rev(tvec), outAdjoint[,'lambda_Sh'], rule = 2)
+  lambda_Eh_fun = approxfun(rev(tvec), outAdjoint[,'lambda_Eh'], rule = 2)
+  lambda_Ih_fun = approxfun(rev(tvec), outAdjoint[,'lambda_Ih'], rule = 2)
+  lambda_Sm_fun = approxfun(rev(tvec), outAdjoint[,'lambda_Sm'], rule = 2)
+  lambda_Em_fun = approxfun(rev(tvec), outAdjoint[,'lambda_Em'], rule = 2)
+  lambda_Im_fun = approxfun(rev(tvec), outAdjoint[,'lambda_Im'], rule = 2)
+  lambda_C_fun = approxfun(rev(tvec), outAdjoint[,'lambda_C'], rule = 2)
+  
+  
+  # end of updating
+  
   
   # get function approximating control that maximizes Hamiltonian
   psi = dHdu(tvec, parms)

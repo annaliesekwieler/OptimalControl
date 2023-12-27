@@ -1,5 +1,6 @@
 
 library(zoo)
+library(odin)
 
 #### functions for mosquito model ####
 
@@ -94,8 +95,8 @@ SEI_model = odin::odin({
   
   # Derivatives
   
-  A_modified = A * (1-C) + A * .75 * C
-  mu_modified = G * (1-C) + G * .9 * C
+  A_modified = A * (1-C) + A * phi_a * C
+  mu_modified = G * (1-C) + G * phi_g * C
 
   # prevalence is current IC + IS
   
@@ -244,7 +245,7 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
   }
   
   optimized_result = optim(par = c( 
-    20
+    default_bR
   ), optimizing_function, method="L-BFGS-B",
   lower=c(
     -10000
@@ -257,3 +258,183 @@ calibration_optimizer = function(temps, rainfall, prop_cases_treated, prevalence
               list(optimized_result$par), optimized_result$convergence, x, y))
   
 }
+
+
+pred_prevalence = function(temps, rainfall, prop_cases_treated, prevalence_2019, incidence_2020,
+                           prevalence_2020, bR){
+  
+  model_res = run_SEISEI(temps = temps, rainfall = rainfall,
+                         prop_cases_treated = prop_cases_treated,
+                         prevalence_2019,
+                         incidence_2020, prevalence_2020, bR = bR)
+  
+  return(mean(model_res$Ih))
+  
+}
+
+#### Optimal control functions ####
+
+
+model_control = odin::odin({
+  
+  # Derivatives
+  
+  A_modified = A * (1-C) + A * phi_a * C
+  mu_modified = G * (1-C) + G * phi_g * C
+  
+  # prevalence is current IC + IS
+  
+  
+  deriv(Sh) <- -A_modified * c * Im * Sh + r*Ih
+  deriv(Eh) <- A_modified * c * Im * Sh - tau * Eh
+  deriv(Ih) <- tau * Eh - r * Ih
+  
+  deriv(Sm) = M * mu_modified - A_modified * b * Ih * Sm - mu_modified * Sm
+  deriv(Em) =  A_modified * b * Ih * Sm - (1/N)*Em - mu_modified * Em
+  deriv(Im) = (1/N)*Em - mu_modified * Im
+  
+  deriv(C) = U * (1 - C / Cmax) - rho * C
+  
+  
+  # Initial conditions
+  initial(Sh) <- Sh_init
+  initial(Eh) <- Eh_init
+  initial(Ih) <- Ih_init
+  
+  initial(Sm) <- Sm_init
+  initial(Em) <- Em_init
+  initial(Im) <- Im_init
+  
+  initial(C) <- C_init
+  
+  M = interpolate(tvec_spline, m_in, 'spline')
+  A = interpolate(tvec_spline, a_in, 'spline')
+  N = interpolate(tvec_spline, n_in, 'spline')
+  G = interpolate(tvec_spline, g_in, 'spline')
+  U = interpolate(tvec_spline, u_in, 'spline')
+  
+  tvec_spline[] = user()
+  m_in[] = user()
+  a_in[] = user()
+  n_in[] = user()
+  g_in[] = user()
+  u_in[] = user()
+  
+  dim(tvec_spline) = 3650
+  dim(m_in) = 3650
+  dim(a_in) = 3650
+  dim(n_in) = 3650
+  dim(g_in) = 3650
+  dim(u_in) = 3650
+  
+  ## parameters
+  r = user()
+  Cmax = user()
+  rho = user()
+  tau = user()
+  b = user()
+  c = user()
+  phi_a = user()
+  phi_g = user()
+  
+  # Initial conditions
+  Sh_init = user()
+  Eh_init = user()
+  Ih_init = user()
+  Sm_init = user()
+  Em_init = user()
+  Im_init = user()
+  C_init = user()
+  
+})
+
+model_adjoint_bkwd = odin({
+  
+  A_modified = A * (1-C) + A * phi_a * C
+  mu_modified = G * (1-C) + G * phi_g * C
+  
+  deriv(lambda_Sh) = lambda_Sh * A_modified * c * Im -
+    lambda_Eh * A_modified * c * Im
+  deriv(lambda_Eh) = lambda_Eh * tau - lambda_Ih * tau
+  deriv(lambda_Ih) = -2 * Ih * ((wd*dd + ws*ds + wm * dm) ^ 2) + 
+    lambda_Sh * r +
+    lambda_Ih * r + lambda_Sm * A_modified * b * Sm - 
+    lambda_Em * A_modified * b * Sm
+  deriv(lambda_Sm) = lambda_Sm * (mu_modified + A_modified * b * Ih) +
+    lambda_Em * A_modified * b * Ih
+  deriv(lambda_Em) = lambda_Em * (mu_modified  + 1/n) - lambda_Im / n
+  deriv(lambda_Im) = lambda_Sh * A_modified * c * Sh - A_modified * c * Sh + 
+    lambda_Im * mu_modified
+  deriv(lambda_C) = lambda_Sh * (a0 * phi_a - a0) * c * Im * Sh - 
+    lambda_Eh * c * Im * Sh * (a0*phi_a - a0) -
+    lambda_Sm * (-m*g0 + m*go *phi_g - (a0*phi_a - a0)*b*Ih * Sm - Sm*(g0 *
+                                                                         phi_g - 
+                                                                         go)) -
+    lambda_Em * (b*Ih*Sm*(a0*phi_a - a0) - Em*(g0*phi_g - g0)) +
+    lambda_Im * Im * (g0 * phi_g - g0) +
+    lambda_C * ((Uc / C_max) - rho)
+  
+  ## parameters
+  r = user()
+  Cmax = user()
+  rho = user()
+  tau = user()
+  b = user()
+  c = user()
+  phi_a = user()
+  phi_g = user()
+  
+  M = interpolate(tvec_spline, m_in, 'spline')
+  A = interpolate(tvec_spline, a_in, 'spline')
+  N = interpolate(tvec_spline, n_in, 'spline')
+  G = interpolate(tvec_spline, g_in, 'spline')
+  U = interpolate(tvec_spline, u_in, 'spline')
+  
+  Sh = interpolate(tvec_spline, Sh_in, "spline")
+  Eh = interpolate(tvec_spline, Eh_in, "spline")
+  Ih = interpolate(tvec_spline, Ih_in, "spline")
+  Sm = interpolate(tvec_spline, Sm_in, "spline")
+  Em = interpolate(tvec_spline, Em_in, "spline")
+  Im = interpolate(tvec_spline, Im_in, "spline")
+  C = interpolate(tvec_spline, C_in, "spline")
+  
+  # state variables
+  Sh_in = user()
+  Eh_in = user()
+  Ih_in = user()
+  Sm_in = user()
+  Em_in = user()
+  Im_in = user()
+  C_in = user()
+  
+  dim(tvec_spline) = 3650
+  dim(m_in) = 3650
+  dim(a_in) = 3650
+  dim(n_in) = 3650
+  dim(g_in) = 3650
+  dim(u_in) = 3650
+  
+  tvec_spline[] = user()
+  m_in[] = user()
+  a_in[] = user()
+  n_in[] = user()
+  g_in[] = user()
+  u_in[] = user()
+  
+  initial(lambda_Sh) = lambda_Sh_init
+  initial(lambda_Eh) = lambda_Eh_init
+  initial(lambda_Ih) = lambda_Ih_init
+  initial(lambda_Sm) = lambda_Sm_init
+  initial(lambda_Em) = lambda_Em_init
+  initial(lambda_Im) = lambda_Im_init
+  initial(lambda_C) = lambda_C_init
+  
+  lambda_Sh_init = user()
+  lambda_Eh_init = user()
+  lambda_Ih_init = user()
+  lambda_Sm_init = user()
+  lambda_Em_init = user()
+  lambda_Im_init = user()
+  lambda_C_init = user()
+  
+})
